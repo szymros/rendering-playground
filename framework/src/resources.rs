@@ -24,11 +24,13 @@ pub type TextureHandle = Handle<wgpu::Texture>;
 pub type SamplerHandle = Handle<wgpu::Sampler>;
 pub type LayoutHandle = Handle<wgpu::BindGroupLayout>;
 
+#[derive(Clone)]
 pub enum TextureBindingType {
     Storage,
     Texture,
 }
 
+#[derive(Clone)]
 pub enum Binding {
     Buffer {
         binding: u32,
@@ -50,12 +52,20 @@ pub enum Binding {
         sample_type: wgpu::TextureSampleType,
         count: u32,
     },
+    TextureLayered {
+        binding: u32,
+        handle: TextureViewHandle,
+        format: wgpu::TextureFormat,
+        bind_type: TextureBindingType,
+        sample_type: wgpu::TextureSampleType,
+    },
     Sampler {
         binding: u32,
         handle: SamplerHandle,
     },
 }
 
+#[derive(Clone)]
 pub struct StoredBindGroup {
     pub layout_handle: LayoutHandle,
     pub bindings: Vec<Binding>,
@@ -114,6 +124,11 @@ impl GpuResources {
         self.queue.write_buffer(buffer, 0, data);
     }
 
+    pub fn write_buffer_offset(&self, handle: &BufferHandle, data: &[u8], offset: u64) {
+        let buffer = self.buffers.get(handle).expect("dangling buffer handle");
+        self.queue.write_buffer(buffer, offset, data);
+    }
+
     pub fn get_buffer(&self, buffer_handle: &BufferHandle) -> &wgpu::Buffer {
         return self
             .buffers
@@ -123,14 +138,14 @@ impl GpuResources {
 
     pub fn create_texture(
         &mut self,
-        tex_size: (u32, u32),
+        tex_size: (u32, u32, u32),
         format: wgpu::TextureFormat,
         texture_usages: wgpu::TextureUsages,
     ) -> TextureResource {
         let texture_size = wgpu::Extent3d {
             width: tex_size.0,
             height: tex_size.1,
-            depth_or_array_layers: 1,
+            depth_or_array_layers: tex_size.2,
         };
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some(""),
@@ -142,16 +157,21 @@ impl GpuResources {
             usage: texture_usages,
             view_formats: &[format],
         });
+        let view_dimension = if tex_size.2 > 1 {
+            Some(wgpu::TextureViewDimension::D2Array)
+        } else {
+            Some(wgpu::TextureViewDimension::D2)
+        };
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
             label: None,
             format: Some(format),
-            dimension: Some(wgpu::TextureViewDimension::D2),
+            dimension: view_dimension,
             usage: None,
             aspect: wgpu::TextureAspect::All,
             base_mip_level: 0,
             mip_level_count: None,
             base_array_layer: 0,
-            array_layer_count: None,
+            array_layer_count: Some(tex_size.2),
         });
         let texture_handle = self.textures.insert(texture);
         let texture_view_handle = self.texture_views.insert(texture_view);
@@ -169,7 +189,7 @@ impl GpuResources {
         format: wgpu::TextureFormat,
         texture_usages: wgpu::TextureUsages,
     ) -> TextureResource {
-        let tex_size = dimensions;
+        let tex_size = (dimensions.0, dimensions.1, 1);
         let texture_res = self.create_texture(tex_size, format, texture_usages);
         let texture = self.get_texture(&texture_res.texture_handle);
         self.queue.write_texture(
@@ -188,7 +208,7 @@ impl GpuResources {
             wgpu::Extent3d {
                 width: tex_size.0,
                 height: tex_size.1,
-                depth_or_array_layers: 1,
+                depth_or_array_layers: tex_size.2,
             },
         );
         return texture_res;
@@ -252,15 +272,30 @@ impl GpuResources {
                 },
                 Binding::Buffer {
                     binding,
-                    buffer_type: wgpu::BufferBindingType::Storage { read_only },
+                    buffer_type: wgpu::BufferBindingType::Storage { read_only: false },
                     ..
                 } => wgpu::BindGroupLayoutEntry {
                     binding: *binding,
-                    visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::COMPUTE
+                        | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage {
-                            read_only: *read_only,
-                        },
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                Binding::Buffer {
+                    binding,
+                    buffer_type: wgpu::BufferBindingType::Storage { read_only: true },
+                    ..
+                } => wgpu::BindGroupLayoutEntry {
+                    binding: *binding,
+                    visibility: wgpu::ShaderStages::COMPUTE
+                        | wgpu::ShaderStages::FRAGMENT
+                        | wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -318,6 +353,29 @@ impl GpuResources {
                         },
                     },
                     count: NonZero::new(*count),
+                },
+                Binding::TextureLayered {
+                    binding,
+                    format,
+                    bind_type,
+                    sample_type,
+                    ..
+                } => wgpu::BindGroupLayoutEntry {
+                    binding: *binding,
+                    visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
+                    ty: match bind_type {
+                        TextureBindingType::Storage => wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: *format,
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                        },
+                        TextureBindingType::Texture => wgpu::BindingType::Texture {
+                            sample_type: *sample_type,
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                    },
+                    count: None,
                 },
             })
             .collect();
@@ -398,6 +456,18 @@ impl GpuResources {
                         binding: *binding,
                         resource: wgpu::BindingResource::TextureViewArray(&texture_array),
                     },
+                    Binding::TextureLayered {
+                        binding, handle, ..
+                    } => {
+                        let texture = self
+                            .texture_views
+                            .get(handle)
+                            .expect(&format!("dangling texture handle for {}", name));
+                        wgpu::BindGroupEntry {
+                            binding: *binding,
+                            resource: wgpu::BindingResource::TextureView(texture),
+                        }
+                    }
                 }
             })
             .collect();

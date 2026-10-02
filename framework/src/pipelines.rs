@@ -4,7 +4,7 @@ use wgpu::{Buffer, VertexBufferLayout};
 
 use crate::instance::Instance;
 use crate::render_context::RenderContext;
-use crate::resources::{BufferHandle, GpuResources, LayoutHandle};
+use crate::resources::{BufferHandle, GpuResources, LayoutHandle, StoredBindGroup};
 use crate::vertex::Vertex;
 
 pub struct ComputePipeline {
@@ -207,7 +207,7 @@ impl<'a> RenderPipelineBuilder<'a> {
 }
 
 pub struct RenderPipeline {
-    pipeline: wgpu::RenderPipeline,
+   pub pipeline: wgpu::RenderPipeline,
     bind_groups: Vec<&'static str>,
     vertex_buffer_handle: Option<BufferHandle>,
     instance_buffer_handle: Option<BufferHandle>,
@@ -361,5 +361,24 @@ impl RenderPipeline {
             render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
         }
         render_pass.draw_indexed(index_range, vertex_range.start as i32, instances);
+    }
+
+    pub fn draw_indirect(
+        &self,
+        render_pass: &mut wgpu::RenderPass,
+        gpu_resources: &GpuResources,
+        indirect_buffer_handle: BufferHandle,
+        offset: u64,
+    ) {
+        for (idx, bind_group_name) in self.bind_groups.iter().enumerate() {
+            let bind_group = gpu_resources
+                .bind_groups
+                .get(bind_group_name)
+                .expect(&format!("Bind group {} missing", bind_group_name));
+            render_pass.set_bind_group(idx as u32, &bind_group.bind_group, &[]);
+        }
+        render_pass.set_pipeline(&self.pipeline);
+        let buffer = gpu_resources.get_buffer(&indirect_buffer_handle);
+        render_pass.draw_indirect(buffer, offset);
     }
 }

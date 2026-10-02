@@ -22,6 +22,7 @@ pub trait App {
         renderer_context: &mut RenderContext,
         encoder: &mut wgpu::CommandEncoder,
         surface: &wgpu::TextureView,
+        time_delta: f32,
     );
 }
 
@@ -82,9 +83,9 @@ impl<A: App> Framework<A> {
             1.0,
         );
         self.app.interpolate(time_alpha, &mut self.render_context);
-        self.render();
+        self.render(delta.as_secs_f32());
     }
-    pub fn render(&mut self) {
+    pub fn render(&mut self, time_delta: f32) {
         let surface_texture = match self.render_context.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return,
@@ -107,7 +108,7 @@ impl<A: App> Framework<A> {
             .device
             .create_command_encoder(&Default::default());
         self.app
-            .render(&mut self.render_context, &mut encoder, &texture_view);
+            .render(&mut self.render_context, &mut encoder, &texture_view, time_delta);
         self.render_context.queue.submit([encoder.finish()]);
         self.window.pre_present_notify();
         surface_texture.present();

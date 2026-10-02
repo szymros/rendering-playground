@@ -34,7 +34,7 @@ struct GBuffer {
 }
 
 impl GBuffer {
-    pub fn new(gpu_resources: &mut GpuResources, texture_size: (u32, u32)) -> GBuffer {
+    pub fn new(gpu_resources: &mut GpuResources, texture_size: (u32, u32, u32)) -> GBuffer {
         let albedo = gpu_resources.create_texture(
             texture_size,
             wgpu::TextureFormat::Rgba8Unorm,
@@ -128,10 +128,18 @@ impl App for State {
         let model_path = std::env::args().nth(1).expect("no gltf path given");
         let gbuffer = GBuffer::new(
             &mut render_context.gpu_resources,
-            render_context.surface_size,
+            (
+                render_context.surface_size.0,
+                render_context.surface_size.1,
+                1,
+            ),
         );
         let intermediate_tex = render_context.gpu_resources.create_texture(
-            render_context.surface_size,
+            (
+                render_context.surface_size.0,
+                render_context.surface_size.1,
+                1,
+            ),
             wgpu::TextureFormat::Rgba16Float,
             ATTACHMENT_TEXTURE_USAGES,
         );
@@ -359,6 +367,7 @@ impl App for State {
         render_context: &mut RenderContext,
         encoder: &mut wgpu::CommandEncoder,
         surface: &wgpu::TextureView,
+        time_delta: f32,
     ) {
         let depth_view = render_context
             .gpu_resources
